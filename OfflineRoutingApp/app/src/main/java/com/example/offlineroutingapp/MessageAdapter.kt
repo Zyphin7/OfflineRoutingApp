@@ -1,5 +1,7 @@
 package com.example.offlineroutingapp
 
+import android.app.AlertDialog
+import android.content.Context
 import android.graphics.BitmapFactory
 import android.util.Base64
 import android.view.Gravity
@@ -38,6 +40,10 @@ class MessageAdapter(private val messages: List<Message>) :
                 val imageBytes = Base64.decode(message.imageData, Base64.NO_WRAP)
                 val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
                 holder.messageImage.setImageBitmap(bitmap)
+
+                holder.messageImage.setOnClickListener {
+                    showFullscreenImage(holder.itemView.context, imageBytes)
+                }
             } catch (e: Exception) {
                 android.util.Log.e("MessageAdapter", "Error decoding image: ${e.message}")
                 holder.messageImage.setImageResource(android.R.drawable.ic_menu_report_image)
@@ -64,7 +70,6 @@ class MessageAdapter(private val messages: List<Message>) :
             }
         }
 
-        // Show message status for sent messages only
         if (message.isSentByMe) {
             holder.messageStatus.visibility = View.VISIBLE
             holder.messageStatus.text = when {
@@ -75,6 +80,21 @@ class MessageAdapter(private val messages: List<Message>) :
         } else {
             holder.messageStatus.visibility = View.GONE
         }
+    }
+
+    private fun showFullscreenImage(context: Context, imageBytes: ByteArray) {
+        val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+        val imageView = ImageView(context).apply {
+            setImageBitmap(bitmap)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setBackgroundColor(android.graphics.Color.BLACK)
+        }
+
+        AlertDialog.Builder(context)
+            .setView(imageView)
+            .setPositiveButton("Close", null)
+            .create()
+            .show()
     }
 
     override fun getItemCount(): Int = messages.size

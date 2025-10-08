@@ -13,4 +13,3 @@ data class ChatEntity(
     val lastMessageTime: Long = System.currentTimeMillis(),
     val unreadCount: Int = 0
 )
-

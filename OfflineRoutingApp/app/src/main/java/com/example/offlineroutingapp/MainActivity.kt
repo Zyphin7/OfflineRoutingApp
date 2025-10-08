@@ -53,12 +53,31 @@ class MainActivity : AppCompatActivity() {
 
     private val reqNearbyPermissionCode = 1001
     private val reqStoragePermissionCode = 1002
-
+    // Add at the top with other launchers
+    private val pairingRequestLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            val accepted = result.data?.getBooleanExtra("PAIRING_ACCEPTED", false) ?: false
+            if (accepted) {
+                wifiService?.sendPairingResponse(true)
+                // Continue with profile exchange
+                exchangeProfileInfo()
+            } else {
+                wifiService?.sendPairingResponse(false)
+                wifiService?.closeConnections()
+            }
+        } else {
+            wifiService?.sendPairingResponse(false)
+            wifiService?.closeConnections()
+        }
+    }
     private val imagePickerLauncher = registerForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let { sendImage(it) }
     }
+
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -88,6 +107,11 @@ class MainActivity : AppCompatActivity() {
 
             wifiService?.onProfileReceived = { userId, displayName, photoBase64 ->
                 handleReceivedProfile(userId, displayName, photoBase64)
+            }
+
+            // NEW: Handle pairing requests
+            wifiService?.onPairingRequest = { deviceName, deviceAddress ->
+                showPairingRequest(deviceName, deviceAddress)
             }
         }
 
@@ -124,20 +148,26 @@ class MainActivity : AppCompatActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent) // Important: update the intent
         handleNotificationIntent(intent)
     }
 
     private fun handleNotificationIntent(intent: Intent) {
         val chatId = intent.getStringExtra("OPEN_CHAT_ID")
+        Log.d(TAG, "handleNotificationIntent called with chatId: $chatId")
+
         if (chatId != null) {
-            Log.d(TAG, "Opening chat from notification: $chatId")
             lifecycleScope.launch {
+                delay(500) // Wait for UI to be ready
                 val chat = database.chatDao().getChatById(chatId)
+                Log.d(TAG, "Found chat: ${chat?.userName}")
+
                 chat?.let {
                     val chatIntent = Intent(this@MainActivity, ChatActivity::class.java).apply {
                         putExtra("CHAT_ID", it.chatId)
                         putExtra("USER_NAME", it.userName)
                         putExtra("USER_PHOTO", it.userProfilePhoto)
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
                     }
                     startActivity(chatIntent)
                 }
@@ -145,6 +175,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun showPairingRequest(deviceName: String, deviceAddress: String) {
+        Log.d(TAG, "Showing pairing request from: $deviceName")
+
+        val intent = Intent(this, PairingRequestActivity::class.java).apply {
+            putExtra("DEVICE_NAME", deviceName)
+            putExtra("DEVICE_ADDRESS", deviceAddress)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        pairingRequestLauncher.launch(intent)
+    }
     private fun initializeViews() {
         tabLayout = findViewById(R.id.tabLayout)
         viewPager = findViewById(R.id.viewPager)
@@ -249,24 +289,28 @@ class MainActivity : AppCompatActivity() {
             Log.d(TAG, "Starting server as Group Owner...")
             wifiService?.startServer()
 
-            lifecycleScope.launch {
-                kotlinx.coroutines.delay(2000)
-                exchangeProfileInfo()
-            }
+            // Wait for client to send pairing request
         } else {
             Log.d(TAG, "Connecting to server at ${groupOwnerAddress.hostAddress}")
             wifiService?.connectToServer(groupOwnerAddress.hostAddress)
 
+            // Client sends pairing request after connection
             lifecycleScope.launch {
-                kotlinx.coroutines.delay(3000)
-                exchangeProfileInfo()
+                delay(2000)
+
+                // Get my device info
+                val user = database.userDao().getUser()
+                val myDeviceName = user?.displayName ?: android.os.Build.MODEL
+                val myDeviceAddress = currentChatId ?: ""
+
+                wifiService?.sendPairingRequest(myDeviceName, myDeviceAddress)
+                Log.d(TAG, "Sent pairing request to server")
             }
         }
 
         wifiService?.currentChatId = currentChatId
 
         viewPager.currentItem = 0
-        Toast.makeText(this, "Connection established!", Toast.LENGTH_SHORT).show()
     }
 
     private val receiver = object : BroadcastReceiver() {
@@ -401,6 +445,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun exchangeProfileInfo() {
         lifecycleScope.launch {
+            delay(1000) // Give connection time to stabilize
+
             val user = database.userDao().getUser()
             user?.let {
                 var photoBase64: String? = null
@@ -410,52 +456,67 @@ class MainActivity : AppCompatActivity() {
                         if (file.exists()) {
                             val bytes = file.readBytes()
                             photoBase64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                            Log.d(TAG, "Profile photo encoded, size: ${bytes.size}")
+                            Log.d(TAG, "Profile photo encoded for sending, size: ${bytes.size}")
+                        } else {
+                            Log.w(TAG, "Profile photo file doesn't exist: ${it.profilePhotoPath}")
                         }
                     } catch (e: Exception) {
-                        Log.e(TAG, "Error encoding profile photo: ${e.message}")
+                        Log.e(TAG, "Error encoding profile photo: ${e.message}", e)
                     }
                 }
 
-                wifiService?.sendProfileInfo(it.userId, it.displayName, photoBase64)
-                Log.d(TAG, "Sent profile info: ${it.userId}, ${it.displayName}")
+                // Send profile info multiple times to ensure delivery
+                repeat(3) { attempt ->
+                    delay(1000 * attempt.toLong())
+                    wifiService?.sendProfileInfo(it.userId, it.displayName, photoBase64)
+                    Log.d(TAG, "Sent profile info attempt ${attempt + 1}: ${it.userId}, ${it.displayName}")
+                }
             }
         }
     }
-
     private fun handleReceivedProfile(userId: String, displayName: String, photoBase64: String) {
         lifecycleScope.launch {
-            Log.d(TAG, "Handling received profile: $userId, $displayName, hasPhoto: ${photoBase64.isNotEmpty()}")
+            Log.d(TAG, "=== PROFILE RECEIVED ===")
+            Log.d(TAG, "User ID: $userId")
+            Log.d(TAG, "Display Name: $displayName")
+            Log.d(TAG, "Has Photo: ${photoBase64.isNotEmpty()}")
+            Log.d(TAG, "Photo size: ${photoBase64.length}")
 
             currentChatId?.let { chatId ->
                 var photoPath: String? = null
+
                 if (photoBase64.isNotEmpty()) {
                     try {
                         val photoBytes = android.util.Base64.decode(photoBase64, android.util.Base64.NO_WRAP)
+                        Log.d(TAG, "Decoded photo bytes: ${photoBytes.size}")
+
                         val profileDir = File(filesDir, "received_profiles")
                         if (!profileDir.exists()) {
-                            profileDir.mkdirs()
+                            val created = profileDir.mkdirs()
+                            Log.d(TAG, "Created profile directory: $created")
                         }
 
-                        val fileName = "profile_${userId}_${System.currentTimeMillis()}.jpg"
+                        val fileName = "profile_${userId}.jpg"
                         val file = File(profileDir, fileName)
                         file.writeBytes(photoBytes)
                         photoPath = file.absolutePath
 
-                        Log.d(TAG, "Saved received profile photo to: $photoPath")
+                        Log.d(TAG, "✓ Saved received profile photo to: $photoPath")
+                        Log.d(TAG, "File exists: ${file.exists()}, size: ${file.length()}")
                     } catch (e: Exception) {
-                        Log.e(TAG, "Error saving received photo: ${e.message}", e)
+                        Log.e(TAG, "✗ Error saving received photo: ${e.message}", e)
                     }
                 }
 
-                val chat = database.chatDao().getChatById(chatId)
-                if (chat != null) {
-                    val updatedChat = chat.copy(
+                // Update or create chat with profile info
+                val existingChat = database.chatDao().getChatById(chatId)
+                if (existingChat != null) {
+                    val updatedChat = existingChat.copy(
                         userName = displayName,
                         userProfilePhoto = photoPath
                     )
                     database.chatDao().updateChat(updatedChat)
-                    Log.d(TAG, "Updated existing chat with profile: $displayName")
+                    Log.d(TAG, "✓ Updated existing chat with profile for: $displayName")
                 } else {
                     val newChat = ChatEntity(
                         chatId = chatId,
@@ -463,7 +524,12 @@ class MainActivity : AppCompatActivity() {
                         userProfilePhoto = photoPath
                     )
                     database.chatDao().insertChat(newChat)
-                    Log.d(TAG, "Created new chat with profile: $displayName")
+                    Log.d(TAG, "✓ Created new chat with profile for: $displayName")
+                }
+
+                // Force UI refresh
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, "Profile received: $displayName", Toast.LENGTH_SHORT).show()
                 }
             }
         }

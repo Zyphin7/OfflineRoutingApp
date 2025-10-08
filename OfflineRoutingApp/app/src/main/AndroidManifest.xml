@@ -11,16 +11,11 @@
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="tiramisu" />
-    <!-- Storage permissions for image access -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"
         tools:targetApi="tiramisu" />
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"
-        tools:targetApi="tiramisu" />
-    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED"
-        tools:targetApi="upside_down_cake" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
@@ -55,6 +50,11 @@
             android:exported="false"
             android:parentActivityName=".MainActivity"
             android:theme="@style/Theme.OfflineRoutingApp" />
+        <activity
+            android:name=".PairingRequestActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Dialog"
+            android:excludeFromRecents="true" />
 
         <service
             android:name=".service.WifiDirectService"
@@ -63,4 +63,5 @@
             android:foregroundServiceType="connectedDevice" />
 
     </application>
+
 </manifest>

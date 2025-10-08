@@ -14,6 +14,5 @@ data class MessageEntity(
     val isImage: Boolean = false,
     val imageData: String? = null,
     val isDelivered: Boolean = false,
-    val isRead: Boolean = false
+    val isSeen: Boolean = false
 )
-

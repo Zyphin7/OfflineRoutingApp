@@ -13,6 +13,7 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.ImageView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.core.app.ActivityCompat
@@ -22,10 +23,13 @@ import androidx.lifecycle.lifecycleScope
 import com.example.offlineroutingapp.R
 import com.example.offlineroutingapp.RegistrationActivity
 import com.example.offlineroutingapp.data.AppDatabase
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import android.graphics.Bitmap
+import android.util.Log
 
 class ProfileFragment : Fragment() {
     private lateinit var profileImage: ImageView
@@ -139,36 +143,50 @@ class ProfileFragment : Fragment() {
     }
 
     private fun performLogout() {
-        lifecycleScope.launch {
-            // Delete all data from database
-            database.clearAllTables()
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                // Stop any active services
+                requireActivity().stopService(Intent(requireContext(), com.example.offlineroutingapp.service.WifiDirectService::class.java))
 
-            // Delete profile photos
-            val profileDir = File(requireContext().filesDir, "profiles")
-            if (profileDir.exists()) {
-                profileDir.deleteRecursively()
+                // Delete database
+                requireContext().deleteDatabase("offline_chat_database")
+
+                // Delete profile photos
+                val profileDir = File(requireContext().filesDir, "profiles")
+                if (profileDir.exists()) {
+                    profileDir.deleteRecursively()
+                }
+
+                val receivedProfileDir = File(requireContext().filesDir, "received_profiles")
+                if (receivedProfileDir.exists()) {
+                    receivedProfileDir.deleteRecursively()
+                }
+
+                Log.d("ProfileFragment", "Logout completed successfully")
+
+                withContext(Dispatchers.Main) {
+                    // Navigate to registration
+                    val intent = Intent(requireContext(), RegistrationActivity::class.java)
+                    intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                    startActivity(intent)
+                    requireActivity().finish()
+                }
+            } catch (e: Exception) {
+                Log.e("ProfileFragment", "Error during logout: ${e.message}", e)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(requireContext(), "Logout failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
             }
-
-            val receivedProfileDir = File(requireContext().filesDir, "received_profiles")
-            if (receivedProfileDir.exists()) {
-                receivedProfileDir.deleteRecursively()
-            }
-
-            // Navigate to registration
-            val intent = Intent(requireContext(), RegistrationActivity::class.java)
-            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-            startActivity(intent)
-            requireActivity().finish()
         }
     }
 
     private fun hasStoragePermission(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.READ_MEDIA_IMAGES) ==
-                    android.content.pm.PackageManager.PERMISSION_GRANTED
+                    PackageManager.PERMISSION_GRANTED
         } else {
             ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.READ_EXTERNAL_STORAGE) ==
-                    android.content.pm.PackageManager.PERMISSION_GRANTED
+                    PackageManager.PERMISSION_GRANTED
         }
     }
 

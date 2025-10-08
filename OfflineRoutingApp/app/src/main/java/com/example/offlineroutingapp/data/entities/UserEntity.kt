@@ -11,4 +11,3 @@ data class UserEntity(
     val profilePhotoPath: String? = null,
     val createdAt: Long = System.currentTimeMillis()
 )
-

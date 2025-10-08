@@ -22,11 +22,15 @@ class WifiDirectService : Service() {
     var clientSocket: Socket? = null
     var isConnected = false
     var currentChatId: String? = null
+    var isChatActivityVisible = false
+    var visibleChatId: String? = null
+
     var onMessageReceived: ((String, Boolean, String?) -> Unit)? = null
     var onConnectionStatusChanged: ((Boolean) -> Unit)? = null
     var onDeliveryStatusChanged: ((String, Boolean) -> Unit)? = null
     var onSeenStatusChanged: ((String, Boolean) -> Unit)? = null
     var onProfileReceived: ((String, String, String) -> Unit)? = null
+    var onPairingRequest: ((String, String) -> Unit)? = null
 
     companion object {
         const val CHANNEL_ID = "WifiDirectServiceChannel"
@@ -96,6 +100,11 @@ class WifiDirectService : Service() {
     }
 
     private fun showMessageNotification(messageText: String, chatId: String?) {
+        if (isChatActivityVisible && visibleChatId == chatId) {
+            android.util.Log.d(TAG, "Chat is visible, skipping notification")
+            return
+        }
+
         val notificationIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("OPEN_CHAT_ID", chatId)
@@ -117,6 +126,7 @@ class WifiDirectService : Service() {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(System.currentTimeMillis().toInt(), notification)
     }
+
     fun updateNotification(text: String) {
         val notification = createNotification(text)
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -241,6 +251,30 @@ class WifiDirectService : Service() {
                                     onProfileReceived?.invoke(userId, displayName, photoBase64)
                                 }
                             }
+                            "PAIRING_REQUEST" -> {
+                                val deviceName = dataInputStream.readUTF()
+                                val deviceAddress = dataInputStream.readUTF()
+
+                                android.util.Log.d(TAG, "Received pairing request from: $deviceName ($deviceAddress)")
+
+                                withContext(Dispatchers.Main) {
+                                    onPairingRequest?.invoke(deviceName, deviceAddress)
+                                }
+                            }
+                            "PAIRING_RESPONSE" -> {
+                                val accepted = dataInputStream.readBoolean()
+                                android.util.Log.d(TAG, "Pairing response: ${if (accepted) "Accepted" else "Declined"}")
+
+                                if (!accepted) {
+                                    android.util.Log.d(TAG, "Pairing declined, closing connection")
+                                    closeConnections()
+                                    withContext(Dispatchers.Main) {
+                                        onConnectionStatusChanged?.invoke(false)
+                                    }
+                                } else {
+                                    android.util.Log.d(TAG, "Pairing accepted!")
+                                }
+                            }
                         }
                     } catch (e: Exception) {
                         if (isConnected) {
@@ -344,10 +378,50 @@ class WifiDirectService : Service() {
                     dataOutputStream.writeUTF(displayName)
                     dataOutputStream.writeUTF(photoBase64 ?: "")
                     dataOutputStream.flush()
-                    android.util.Log.d(TAG, "Profile info sent")
+                    android.util.Log.d(TAG, "Profile info sent: $userId, $displayName")
                 }
             } catch (e: Exception) {
                 android.util.Log.e(TAG, "Error sending profile info: ${e.message}")
+            }
+        }
+    }
+
+    fun sendPairingRequest(deviceName: String, deviceAddress: String) {
+        serviceScope.launch {
+            try {
+                if (clientSocket != null && isConnected) {
+                    android.util.Log.d(TAG, "Sending pairing request: $deviceName, $deviceAddress")
+                    val dataOutputStream = DataOutputStream(clientSocket!!.getOutputStream())
+                    dataOutputStream.writeUTF("PAIRING_REQUEST")
+                    dataOutputStream.writeUTF(deviceName)
+                    dataOutputStream.writeUTF(deviceAddress)
+                    dataOutputStream.flush()
+                    android.util.Log.d(TAG, "Pairing request sent successfully")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e(TAG, "Error sending pairing request: ${e.message}")
+            }
+        }
+    }
+
+    fun sendPairingResponse(accepted: Boolean) {
+        serviceScope.launch {
+            try {
+                if (clientSocket != null && isConnected) {
+                    android.util.Log.d(TAG, "Sending pairing response: $accepted")
+                    val dataOutputStream = DataOutputStream(clientSocket!!.getOutputStream())
+                    dataOutputStream.writeUTF("PAIRING_RESPONSE")
+                    dataOutputStream.writeBoolean(accepted)
+                    dataOutputStream.flush()
+                    android.util.Log.d(TAG, "Pairing response sent successfully")
+
+                    if (!accepted) {
+                        delay(500)
+                        closeConnections()
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e(TAG, "Error sending pairing response: ${e.message}")
             }
         }
     }
